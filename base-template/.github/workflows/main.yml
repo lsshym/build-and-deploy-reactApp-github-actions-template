@@ -1,0 +1,54 @@
+name: CI/CD
+
+on:
+  push:
+    branches:
+      - main # 修改为你要触发 CI/CD 的分支
+# 测试
+env:
+  REGISTRY: registry.cn-hangzhou.aliyuncs.com # 定义阿里云镜像仓库地址，可改成别的，如ghcr.io
+  NAMESPACE: docker-images-lssh # 命名空间
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Clear Docker cache
+        run: docker builder prune -f
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v1
+
+      # 需要在secrets中添加阿里账号密码，登录
+      - name: Login to Alibaba Cloud
+        run: docker login --username=${{ secrets.ALIYUN_USERNAME }} --password=${{ secrets.ALIYUN_PASSWORD }} ${{ env.REGISTRY }}
+      
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v2
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: ${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ github.event.repository.name }}-image:latest # 使用项目名称作为镜像名
+
+
+  deploy:
+    runs-on: ubuntu-latest
+    needs: build
+
+    steps:
+      - name: SSH to Server and Deploy
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.SERVER_HOST }} # 你的服务器 IP 地址
+          username: ${{ secrets.SERVER_USERNAME }} # 你的 SSH 用户名
+          key: ${{ secrets.SERVER_SSH_KEY }} # 用于连接服务器的私钥
+          script: |
+            docker pull ${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ github.event.repository.name }}-image:latest
+            docker stop ${{ github.event.repository.name }}-container || true
+            docker rm ${{ github.event.repository.name }}-container || true
+            docker run -d --name ${{ github.event.repository.name }}-container -p 80:80 ${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ github.event.repository.name }}-image:latest
